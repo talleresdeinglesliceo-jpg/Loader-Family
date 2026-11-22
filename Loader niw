@@ -1,0 +1,1231 @@
+-- Family Hud | Murder Mystery 2 (WindUI Black Edition - Single UI)
+local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+local VirtualUser = game:GetService("VirtualUser")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = Workspace.CurrentCamera
+local DiscordInviteUrl = "https://discord.gg/TgpqVgWmt"
+
+-- Limpiar restos de interfaces anteriores si existían
+for _, oldName in ipairs({ "FamilyHUD_NativeUI", "FamilyHUD_CompactOpen", "FamilyHud_CompactOpen" }) do
+	local existing = PlayerGui:FindFirstChild(oldName)
+	if existing then existing:Destroy() end
+end
+
+-- ==========================================
+-- UTILIDADES
+-- ==========================================
+local function safeTouch(part, root)
+	if not part or not root or not part:IsA("BasePart") then return end
+	if typeof(firetouchinterest) == "function" then
+		pcall(function()
+			firetouchinterest(root, part, 0)
+			firetouchinterest(root, part, 1)
+		end)
+	end
+end
+
+local function detectExecutorName()
+	for _, fn in ipairs({ identifyexecutor, getexecutorname }) do
+		if typeof(fn) == "function" then
+			local ok, name = pcall(fn)
+			if ok and type(name) == "string" and name ~= "" then return name end
+		end
+	end
+	return "Desconocido"
+end
+
+local function copyToClipboard(text)
+	for _, fn in ipairs({ setclipboard, toclipboard, set_clipboard }) do
+		if typeof(fn) == "function" then
+			if pcall(fn, text) then return true end
+		end
+	end
+	return false
+end
+
+local function getCurrentPingMs()
+	local pingVal = 0
+	pcall(function()
+		local net = Stats:FindFirstChild("Network")
+		local serverStats = net and net:FindFirstChild("ServerStats")
+		local dataPing = serverStats and serverStats:FindFirstChild("Data Ping")
+		if dataPing and typeof(dataPing.GetValue) == "function" then
+			pingVal = tonumber(dataPing:GetValue()) or 0
+		elseif dataPing and dataPing.Value then
+			pingVal = tonumber(dataPing.Value) or 0
+		end
+	end)
+	if pingVal <= 0 then
+		pcall(function()
+			pingVal = (LocalPlayer:GetNetworkPing() or 0) * 2000
+		end)
+	end
+	return math.clamp(math.floor(pingVal + 0.5), 0, 9999)
+end
+
+-- ==========================================
+-- PRESETS Y ESTADO
+-- ==========================================
+local SkyboxPresets = {
+	{ Name = "Default Sky", StarCount = 3000, SunAngularSize = 21, MoonAngularSize = 11, Ft = "rbxassetid://159454299", Bk = "rbxassetid://159454296", Lf = "rbxassetid://159454293", Rt = "rbxassetid://159454300", Up = "rbxassetid://159454288", Dn = "rbxassetid://159454286" },
+	{ Name = "Night Stars", StarCount = 5000, SunAngularSize = 10, MoonAngularSize = 16, Ft = "rbxassetid://12064107", Bk = "rbxassetid://12064152", Lf = "rbxassetid://12064121", Rt = "rbxassetid://12064115", Up = "rbxassetid://12064131", Dn = "rbxassetid://12064107" },
+	{ Name = "Purple Space", StarCount = 4500, SunAngularSize = 12, MoonAngularSize = 14, Ft = "rbxassetid://159248188", Bk = "rbxassetid://159248183", Lf = "rbxassetid://159248176", Rt = "rbxassetid://159248168", Up = "rbxassetid://159248194", Dn = "rbxassetid://159248180" },
+	{ Name = "Crimson Sunset", StarCount = 1200, SunAngularSize = 26, MoonAngularSize = 11, Ft = "rbxassetid://451220849", Bk = "rbxassetid://451220849", Lf = "rbxassetid://451220849", Rt = "rbxassetid://451220849", Up = "rbxassetid://451220849", Dn = "rbxassetid://451220849" },
+	{ Name = "Emerald Horizon", StarCount = 2500, SunAngularSize = 18, MoonAngularSize = 12, Ft = "rbxassetid://149397692", Bk = "rbxassetid://149397684", Lf = "rbxassetid://149397688", Rt = "rbxassetid://149397702", Up = "rbxassetid://149397696", Dn = "rbxassetid://149397681" }
+}
+
+local SkyboxNames, SkyboxMap = {}, {}
+for i, preset in ipairs(SkyboxPresets) do
+	SkyboxNames[i] = preset.Name
+	SkyboxMap[preset.Name] = preset
+end
+
+local MapsList = { "House", "Factory", "Office", "Bank", "Mil Base", "Bio Lab" }
+local ConfigFileName = "FamilyHud_WindUI_Config.json"
+local MemoryConfigBackup = nil
+
+local State = {
+	SkyboxName = "Default Sky",
+	SpeedEnabled = false,
+	CustomSpeed = 28,
+	DefaultSpeed = 16,
+	InfinityJump = false,
+	Noclip = false,
+	ESPRoles = false,
+	CamLockEnabled = false,
+	AutoKillEnabled = false,
+	AutoShotMurder = false,
+	AutoGrabGun = false,
+	FarmCoins = false,
+	CoinBagLimit = 40,
+	FPSBoost = false,
+	FlyEnabled = false,
+	FlySpeed = 50,
+	AntiAFK = false,
+	HitboxExpander = false,
+	HitboxSize = 12,
+	HitboxTransparency = 0.65,
+	SelectedMap = "House",
+	AutoVoteMap = false
+}
+
+-- ==========================================
+-- SKYBOX Y FPS BOOST
+-- ==========================================
+local LightingBackup = {
+	GlobalShadows = Lighting.GlobalShadows,
+	EnvironmentSpecularScale = Lighting.EnvironmentSpecularScale,
+	EnvironmentDiffuseScale = Lighting.EnvironmentDiffuseScale
+}
+
+local managedSky = Lighting:FindFirstChild("FamilyHudSky")
+if not managedSky or not managedSky:IsA("Sky") then
+	managedSky = Instance.new("Sky")
+	managedSky.Name = "FamilyHudSky"
+end
+managedSky.Parent = Lighting
+
+local function applySkyboxByName(skyName)
+	local preset = SkyboxMap[skyName] or SkyboxPresets[1]
+	State.SkyboxName = preset.Name
+	pcall(function()
+		if not managedSky or not managedSky.Parent then
+			managedSky = Lighting:FindFirstChild("FamilyHudSky") or Instance.new("Sky")
+			managedSky.Name = "FamilyHudSky"
+			managedSky.Parent = Lighting
+		end
+		managedSky.StarCount = preset.StarCount
+		managedSky.SunAngularSize = preset.SunAngularSize
+		managedSky.MoonAngularSize = preset.MoonAngularSize
+		managedSky.SkyboxFt = preset.Ft
+		managedSky.SkyboxBk = preset.Bk
+		managedSky.SkyboxLf = preset.Lf
+		managedSky.SkyboxRt = preset.Rt
+		managedSky.SkyboxUp = preset.Up
+		managedSky.SkyboxDn = preset.Dn
+	end)
+end
+
+local function applyFPSBoost(enabled)
+	State.FPSBoost = enabled
+	pcall(function()
+		if enabled then
+			Lighting.GlobalShadows = false
+			Lighting.EnvironmentSpecularScale = 0
+			Lighting.EnvironmentDiffuseScale = 0
+		else
+			Lighting.GlobalShadows = LightingBackup.GlobalShadows
+			Lighting.EnvironmentSpecularScale = LightingBackup.EnvironmentSpecularScale
+			Lighting.EnvironmentDiffuseScale = LightingBackup.EnvironmentDiffuseScale
+		end
+	end)
+end
+
+-- ==========================================
+-- MOVIMIENTO: FLY Y NOCLIP
+-- ==========================================
+local flyAttachment, flyLinearVel = nil, nil
+
+local function clearFlyPhysics()
+	if flyLinearVel then pcall(function() flyLinearVel:Destroy() end) flyLinearVel = nil end
+	if flyAttachment then pcall(function() flyAttachment:Destroy() end) flyAttachment = nil end
+end
+
+local function ensureFlyPhysics(root, hum)
+	if not root or not root:IsA("BasePart") then return nil end
+	if hum and hum.PlatformStand ~= true then pcall(function() hum.PlatformStand = true end) end
+	if not flyAttachment or not flyAttachment.Parent then
+		flyAttachment = Instance.new("Attachment")
+		flyAttachment.Name = "FamilyFlyAttachment"
+		flyAttachment.Parent = root
+	end
+	if not flyLinearVel or not flyLinearVel.Parent then
+		flyLinearVel = Instance.new("LinearVelocity")
+		flyLinearVel.Name = "FamilyFlyVelocity"
+		flyLinearVel.Attachment0 = flyAttachment
+		flyLinearVel.ForceLimitMode = Enum.ForceLimitMode.Magnitude
+		flyLinearVel.MaxForce = 1e6
+		flyLinearVel.VectorVelocity = Vector3.zero
+		flyLinearVel.Parent = root
+	end
+	return flyLinearVel
+end
+
+local function setFlyState(enabled)
+	State.FlyEnabled = enabled
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if enabled then
+		if root and hum then ensureFlyPhysics(root, hum) end
+	else
+		clearFlyPhysics()
+		if hum and hum.PlatformStand then pcall(function() hum.PlatformStand = false end) end
+	end
+end
+
+local OriginalCanCollide = setmetatable({}, { __mode = "k" })
+
+local function applyNoclipStep(char)
+	if not char then return end
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			if OriginalCanCollide[part] == nil then OriginalCanCollide[part] = part.CanCollide end
+			if part.CanCollide then part.CanCollide = false end
+		end
+	end
+end
+
+local function restoreNoclip(char)
+	if not char then return end
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") and OriginalCanCollide[part] ~= nil then
+			part.CanCollide = OriginalCanCollide[part]
+			OriginalCanCollide[part] = nil
+		end
+	end
+end
+
+local function setNoclipState(enabled)
+	State.Noclip = enabled
+	if enabled then applyNoclipStep(LocalPlayer.Character) else restoreNoclip(LocalPlayer.Character) end
+end
+
+RunService.Stepped:Connect(function()
+	if State.Noclip then
+		applyNoclipStep(LocalPlayer.Character)
+	end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+	if not State.InfinityJump then return end
+	local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+-- ==========================================
+-- ROLES, ESP, RAYCAST + SILENT AIM AUTO SHOOT Y COIN BAG
+-- ==========================================
+local RoleColors = {
+	Murder = Color3.fromRGB(235, 64, 52),
+	Sheriff = Color3.fromRGB(52, 134, 235),
+	Innocent = Color3.fromRGB(52, 199, 89)
+}
+local RoleLabels = { Murder = "MURDER", Sheriff = "SHERIFF", Innocent = "INOCENTE" }
+
+local function clearESP()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr.Character then
+			local hl = plr.Character:FindFirstChild("FamilyRoleESP")
+			if hl then hl:Destroy() end
+			local tag = plr.Character:FindFirstChild("FamilyRoleTag")
+			if tag then tag:Destroy() end
+		end
+	end
+end
+
+local function getRoleType(plr)
+	local backpack = plr:FindFirstChild("Backpack")
+	local char = plr.Character
+	local function hasTool(container, keyword)
+		if not container then return false end
+		for _, item in ipairs(container:GetChildren()) do
+			if item:IsA("Tool") and string.find(string.lower(item.Name), keyword) then return true end
+		end
+		return false
+	end
+	if hasTool(char, "knife") or hasTool(backpack, "knife") then return "Murder" end
+	if hasTool(char, "gun") or hasTool(backpack, "gun") or hasTool(char, "revolver") or hasTool(backpack, "revolver") then return "Sheriff" end
+	return "Innocent"
+end
+
+local function isGunTool(obj)
+	if not obj or not obj:IsA("Tool") then return false end
+	local n = string.lower(obj.Name)
+	return string.find(n, "gun") ~= nil or string.find(n, "revolver") ~= nil or string.find(n, "pistol") ~= nil
+end
+
+local function isKnifeTool(obj)
+	if not obj or not obj:IsA("Tool") then return false end
+	return string.find(string.lower(obj.Name), "knife") ~= nil
+end
+
+local function getEquippedOrOwnedGun()
+	local char = LocalPlayer.Character
+	local backpack = LocalPlayer:FindFirstChild("Backpack")
+	if char then
+		for _, child in ipairs(char:GetChildren()) do
+			if isGunTool(child) then return child end
+		end
+	end
+	if backpack then
+		for _, child in ipairs(backpack:GetChildren()) do
+			if isGunTool(child) then return child end
+		end
+	end
+	return nil
+end
+
+local function getEquippedOrOwnedKnife()
+	local char = LocalPlayer.Character
+	local backpack = LocalPlayer:FindFirstChild("Backpack")
+	if char then
+		for _, child in ipairs(char:GetChildren()) do
+			if isKnifeTool(child) then return child end
+		end
+	end
+	if backpack then
+		for _, child in ipairs(backpack:GetChildren()) do
+			if isKnifeTool(child) then return child end
+		end
+	end
+	return nil
+end
+
+local function hasGunEquippedOrOwned()
+	return getEquippedOrOwnedGun() ~= nil
+end
+
+local function getMurderTargetInfo()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and getRoleType(plr) == "Murder" then
+			local char = plr.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if char and hum and hum.Health > 0 then
+				local torso = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+				local head = char:FindFirstChild("Head")
+				local aimPart = (head and head:IsA("BasePart") and head) or (torso and torso:IsA("BasePart") and torso)
+				if torso and torso:IsA("BasePart") and aimPart then
+					return torso, aimPart, plr, char
+				end
+			end
+		end
+	end
+	return nil, nil, nil, nil
+end
+
+local function getMurderTorsoPart()
+	return select(1, getMurderTargetInfo())
+end
+
+local function detectMurderByRaycast(targetPart, targetChar)
+	if not targetPart or not targetChar then return false end
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local ignoreList = {}
+	if LocalPlayer.Character then table.insert(ignoreList, LocalPlayer.Character) end
+	if Camera then table.insert(ignoreList, Camera) end
+	rayParams.FilterDescendantsInstances = ignoreList
+
+	local origin = Camera and Camera.CFrame.Position or nil
+	if not origin then
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if root then origin = root.Position + Vector3.new(0, 1.5, 0) end
+	end
+	if not origin then return false end
+
+	local delta = targetPart.Position - origin
+	local dist = delta.Magnitude
+	if dist <= 0.1 then return true end
+
+	local hit = Workspace:Raycast(origin, delta.Unit * (dist + 2), rayParams)
+	if hit and hit.Instance then
+		return hit.Instance:IsDescendantOf(targetChar)
+	end
+	return true
+end
+
+local function getAliveTargetsInMatch()
+	local targets = {}
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer then
+			local char = plr.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+			if char and hum and hum.Health > 0 and root then
+				table.insert(targets, { root = root })
+			end
+		end
+	end
+	return targets
+end
+
+local autoKillIndex = 1
+local lastAutoKillStep = 0
+
+local function runAutoKillStep(myChar, myHum, myRoot)
+	if not State.AutoKillEnabled or not myChar or not myHum or not myRoot or myHum.Health <= 0 then return end
+	local now = os.clock()
+	if (now - lastAutoKillStep) < 0.22 then return end
+
+	local equippedTool = myChar:FindFirstChildOfClass("Tool")
+	local gunTool = getEquippedOrOwnedGun()
+	local knifeTool = getEquippedOrOwnedKnife()
+
+	if gunTool then
+		if equippedTool ~= gunTool and not equippedTool then
+			pcall(function() myHum:EquipTool(gunTool) end)
+		end
+		local murderTorso = getMurderTorsoPart()
+		if murderTorso then
+			lastAutoKillStep = now
+			pcall(function() myRoot.CFrame = murderTorso.CFrame * CFrame.new(0, 0, 3.8) end)
+		end
+		return
+	end
+
+	if knifeTool then
+		if equippedTool ~= knifeTool and not equippedTool then
+			pcall(function() myHum:EquipTool(knifeTool) end)
+		end
+		local targets = getAliveTargetsInMatch()
+		if #targets > 0 then
+			if autoKillIndex > #targets then autoKillIndex = 1 end
+			local chosen = targets[autoKillIndex]
+			autoKillIndex += 1
+			if chosen and chosen.root then
+				lastAutoKillStep = now
+				pcall(function() myRoot.CFrame = chosen.root.CFrame * CFrame.new(0, 0, 3.2) end)
+			end
+		end
+	end
+end
+
+local activeSilentAimPos = nil
+local lastAutoShotTime = 0
+
+local function triggerGunFire(gunTool, targetPos)
+	if not gunTool or not targetPos then return end
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not char or not hum or hum.Health <= 0 then return end
+
+	if gunTool.Parent ~= char then
+		pcall(function() hum:EquipTool(gunTool) end)
+	end
+
+	local firedRemote = false
+	for _, desc in ipairs(gunTool:GetDescendants()) do
+		if desc:IsA("RemoteEvent") then
+			pcall(function() desc:FireServer(targetPos) end)
+			firedRemote = true
+		end
+	end
+
+	if not firedRemote then
+		pcall(function() gunTool:Activate() end)
+	end
+end
+
+local function runRaycastSilentAutoShoot()
+	if not State.AutoShotMurder then
+		activeSilentAimPos = nil
+		return
+	end
+	local gunTool = getEquippedOrOwnedGun()
+	if not gunTool then
+		activeSilentAimPos = nil
+		return
+	end
+	local _, aimPart, _, murderChar = getMurderTargetInfo()
+	if not aimPart or not murderChar or not detectMurderByRaycast(aimPart, murderChar) then
+		activeSilentAimPos = nil
+		return
+	end
+	activeSilentAimPos = aimPart.Position
+	local now = os.clock()
+	if (now - lastAutoShotTime) >= 0.18 then
+		lastAutoShotTime = now
+		triggerGunFire(gunTool, activeSilentAimPos)
+	end
+end
+
+pcall(function()
+	if typeof(hookmetamethod) == "function" then
+		local oldNamecall
+		oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+			if activeSilentAimPos and self == Workspace then
+				local method = getnamecallmethod()
+				if method == "Raycast" or method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" then
+					local args = { ... }
+					if method == "Raycast" and typeof(args[1]) == "Vector3" then
+						args[2] = (activeSilentAimPos - args[1]).Unit * 500
+						return oldNamecall(self, unpack(args))
+					elseif (method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList") and typeof(args[1]) == "Ray" then
+						local origin = args[1].Origin
+						args[1] = Ray.new(origin, (activeSilentAimPos - origin).Unit * 500)
+						return oldNamecall(self, unpack(args))
+					end
+				end
+			end
+			return oldNamecall(self, ...)
+		end)
+	end
+end)
+
+local function isCoinBagFull()
+	local bagLimit = tonumber(State.CoinBagLimit) or 40
+	local function checkContainer(container)
+		if not container then return false end
+		for _, child in ipairs(container:GetDescendants()) do
+			if child:IsA("IntValue") or child:IsA("NumberValue") then
+				local lower = string.lower(child.Name)
+				if lower == "coins" or lower == "coinbag" or lower == "bag" or string.find(lower, "coin") then
+					if tonumber(child.Value) and tonumber(child.Value) >= bagLimit then return true end
+				end
+			elseif child:IsA("TextLabel") or child:IsA("TextButton") then
+				local txt = string.lower(child.Text or "")
+				if string.find(txt, "bag full") or string.find(txt, "bolsa llena") or string.find(txt, "max") then return true end
+				local cur, maxV = string.match(txt, "(%d+)%s*/%s*(%d+)")
+				if cur and maxV and tonumber(maxV) > 0 and tonumber(cur) >= tonumber(maxV) then return true end
+			end
+		end
+		return false
+	end
+	return checkContainer(LocalPlayer:FindFirstChild("leaderstats"))
+		or checkContainer(LocalPlayer:FindFirstChild("PlayerGui"))
+		or checkContainer(LocalPlayer.Character)
+end
+
+local function ensureRoleTag(plr, char, role, color)
+	local anchor = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+	if not anchor or not anchor:IsA("BasePart") then return end
+
+	local bbg = char:FindFirstChild("FamilyRoleTag")
+	if not bbg then
+		bbg = Instance.new("BillboardGui")
+		bbg.Name = "FamilyRoleTag"
+		bbg.Size = UDim2.new(0, 160, 0, 30)
+		bbg.StudsOffset = Vector3.new(0, 2.6, 0)
+		bbg.AlwaysOnTop = true
+		bbg.MaxDistance = 800
+		bbg.Parent = char
+
+		local lbl = Instance.new("TextLabel")
+		lbl.Name = "TagLabel"
+		lbl.Size = UDim2.new(1, 0, 1, 0)
+		lbl.BackgroundTransparency = 1
+		lbl.Font = Enum.Font.GothamBold
+		lbl.TextSize = 12
+		lbl.TextStrokeTransparency = 0.25
+		lbl.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+		lbl.Parent = bbg
+	end
+
+	bbg.Adornee = anchor
+	local lbl = bbg:FindFirstChild("TagLabel")
+	if lbl and lbl:IsA("TextLabel") then
+		lbl.Text = "[" .. (RoleLabels[role] or "INOCENTE") .. "] " .. plr.DisplayName
+		lbl.TextColor3 = color
+	end
+end
+
+local function updateESPRoles()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local existingHl = plr.Character:FindFirstChild("FamilyRoleESP")
+			local existingTag = plr.Character:FindFirstChild("FamilyRoleTag")
+			if State.ESPRoles then
+				local role = getRoleType(plr)
+				local color = RoleColors[role] or RoleColors.Innocent
+				local hl = existingHl or Instance.new("Highlight")
+				hl.Name = "FamilyRoleESP"
+				hl.Adornee = plr.Character
+				hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+				hl.FillColor = color
+				hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+				hl.FillTransparency = 0.45
+				hl.OutlineTransparency = 0
+				hl.Parent = plr.Character
+				ensureRoleTag(plr, plr.Character, role, color)
+			else
+				if existingHl then existingHl:Destroy() end
+				if existingTag then existingTag:Destroy() end
+			end
+		end
+	end
+end
+
+-- ==========================================
+-- HITBOX EXPANDER
+-- ==========================================
+local OriginalHitboxSizes = setmetatable({}, { __mode = "k" })
+local hitboxDirty = true
+
+local function restoreSingleHitbox(hrp)
+	if not hrp or not hrp:IsA("BasePart") then return end
+	local origSize = OriginalHitboxSizes[hrp] or Vector3.new(2, 2, 1)
+	pcall(function()
+		hrp.Size = origSize
+		hrp.Transparency = 1
+		hrp.CanCollide = false
+		hrp.Massless = false
+	end)
+end
+
+local function resetHitboxes()
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+			if hrp then restoreSingleHitbox(hrp) end
+		end
+	end
+	hitboxDirty = false
+end
+
+local function updateHitboxes()
+	local targetVec = Vector3.new(State.HitboxSize, State.HitboxSize, State.HitboxSize)
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LocalPlayer and plr.Character then
+			local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
+			if hrp and hrp:IsA("BasePart") then
+				if OriginalHitboxSizes[hrp] == nil then OriginalHitboxSizes[hrp] = hrp.Size end
+				if State.HitboxExpander then
+					pcall(function()
+						hrp.CanCollide = false
+						hrp.Massless = true
+						if hrp.Size ~= targetVec then hrp.Size = targetVec end
+						if hrp.Transparency ~= State.HitboxTransparency then hrp.Transparency = State.HitboxTransparency end
+					end)
+				else
+					restoreSingleHitbox(hrp)
+				end
+			end
+		end
+	end
+	hitboxDirty = false
+end
+
+-- ==========================================
+-- VENTANA WINDUI: Family Hud (ÚNICA INTERFAZ)
+-- ==========================================
+local Window = WindUI:CreateWindow({
+	Title = "Family Hud",
+	Icon = "shield",
+	Author = "by heaven",
+	Folder = "FamilyHud_WindUI",
+	Size = UDim2.fromOffset(590, 410),
+	Transparent = false,
+	Theme = "Dark",
+	SideBarWidth = 170,
+	HasOutline = true,
+	User = {
+		Enabled = true,
+		Anonymous = false,
+		Callback = function() end
+	}
+})
+
+-- Tabs / Categorías
+local HomeTab    = Window:Tab({ Title = "Home", Icon = "home" })
+local MovTab     = Window:Tab({ Title = "Movimiento", Icon = "zap" })
+local EspTab     = Window:Tab({ Title = "ESP", Icon = "eye" })
+local MsTab      = Window:Tab({ Title = "Murder & Sheriff", Icon = "crosshair" })
+local AutoTab    = Window:Tab({ Title = "Automático", Icon = "bot" })
+local HitboxTab  = Window:Tab({ Title = "Hitbox", Icon = "box" })
+local VoteTab    = Window:Tab({ Title = "Votar Mapa", Icon = "map" })
+local ConfiTab   = Window:Tab({ Title = "Confi", Icon = "settings" })
+local CreditsTab = Window:Tab({ Title = "Credits", Icon = "award" })
+
+-- ==========================================
+-- 1. HOME
+-- ==========================================
+HomeTab:Section({ Title = "Perfil y Rendimiento" })
+
+HomeTab:Paragraph({
+	Title = "Bienvenido, " .. LocalPlayer.DisplayName,
+	Desc = "Ejecutor: " .. detectExecutorName() .. " • @" .. LocalPlayer.Name
+})
+
+local PerfParagraph = HomeTab:Paragraph({
+	Title = "FPS & MS Counter",
+	Desc = "FPS: --  |  MS: -- ms"
+})
+
+HomeTab:Section({ Title = "Comunidad" })
+
+HomeTab:Button({
+	Title = "Copiar invitación de Discord",
+	Desc = DiscordInviteUrl,
+	Callback = function()
+		local ok = copyToClipboard(DiscordInviteUrl)
+		WindUI:Notify({
+			Title = "Family Hud",
+			Content = ok and "Enlace copiado." or "No se pudo copiar.",
+			Duration = 2.5
+		})
+	end
+})
+
+-- ==========================================
+-- 2. MOVIMIENTO
+-- ==========================================
+MovTab:Section({ Title = "Velocidad y Salto" })
+
+MovTab:Toggle({
+	Title = "WalkSpeed Activo",
+	Desc = "Aplica la velocidad personalizada",
+	Value = State.SpeedEnabled,
+	Callback = function(v)
+		State.SpeedEnabled = v
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum and not v then hum.WalkSpeed = State.DefaultSpeed end
+	end
+})
+
+MovTab:Slider({
+	Title = "Velocidad (WalkSpeed)",
+	Step = 1,
+	Value = { Min = 16, Max = 120, Default = State.CustomSpeed },
+	Callback = function(val) State.CustomSpeed = tonumber(val) or 28 end
+})
+
+MovTab:Button({
+	Title = "Resetear WalkSpeed (16)",
+	Callback = function()
+		State.CustomSpeed = State.DefaultSpeed
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.WalkSpeed = State.DefaultSpeed end
+	end
+})
+
+MovTab:Toggle({
+	Title = "Infinity Jump",
+	Desc = "Salto infinito en el aire",
+	Value = State.InfinityJump,
+	Callback = function(v) State.InfinityJump = v end
+})
+
+MovTab:Toggle({
+	Title = "Noclip",
+	Desc = "Atraviesa paredes y obstáculos",
+	Value = State.Noclip,
+	Callback = function(v) setNoclipState(v) end
+})
+
+MovTab:Section({ Title = "Vuelo (Fly)" })
+
+MovTab:Toggle({
+	Title = "Fly",
+	Desc = "WASD + Space (subir) / LeftControl (bajar)",
+	Value = State.FlyEnabled,
+	Callback = function(v) setFlyState(v) end
+})
+
+MovTab:Slider({
+	Title = "Velocidad de Fly",
+	Step = 1,
+	Value = { Min = 10, Max = 150, Default = State.FlySpeed },
+	Callback = function(val) State.FlySpeed = tonumber(val) or 50 end
+})
+
+-- ==========================================
+-- 3. ESP
+-- ==========================================
+EspTab:Section({ Title = "Visuales de Ronda" })
+
+EspTab:Toggle({
+	Title = "ESP Roles",
+	Desc = "Murder, Sheriff e Inocentes tras paredes + etiqueta",
+	Value = State.ESPRoles,
+	Callback = function(v)
+		State.ESPRoles = v
+		if not v then clearESP() else pcall(updateESPRoles) end
+	end
+})
+
+-- ==========================================
+-- 4. MURDER & SHERIFF
+-- ==========================================
+MsTab:Section({ Title = "Combate y Asistencia" })
+
+MsTab:Toggle({
+	Title = "CamLock",
+	Desc = "Fija cámara al Murder si tienes arma y hay línea de visión",
+	Value = State.CamLockEnabled,
+	Callback = function(v) State.CamLockEnabled = v end
+})
+
+MsTab:Toggle({
+	Title = "AutoKill",
+	Desc = "Con Gun: TP detrás del Murder | Con Cuchillo: TP a vivos",
+	Value = State.AutoKillEnabled,
+	Callback = function(v)
+		State.AutoKillEnabled = v
+		autoKillIndex = 1
+	end
+})
+
+MsTab:Section({ Title = "Teletransportes Rápidos" })
+
+MsTab:Button({
+	Title = "TP hacia Gun Drop",
+	Callback = function()
+		local gunPart = Workspace:FindFirstChild("GunDrop", true)
+		local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if gunPart and root then root.CFrame = gunPart.CFrame + Vector3.new(0, 3, 0) end
+	end
+})
+
+MsTab:Button({
+	Title = "TP detrás del Murder",
+	Callback = function()
+		local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		local mRoot = getMurderTorsoPart()
+		if myRoot and mRoot then myRoot.CFrame = mRoot.CFrame * CFrame.new(0, 0, 4) end
+	end
+})
+
+MsTab:Button({
+	Title = "TP detrás del Sheriff",
+	Callback = function()
+		local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not myRoot then return end
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and getRoleType(plr) == "Sheriff" and plr.Character then
+				local sRoot = plr.Character:FindFirstChild("HumanoidRootPart")
+				if sRoot then
+					myRoot.CFrame = sRoot.CFrame * CFrame.new(0, 0, 4)
+					break
+				end
+			end
+		end
+	end
+})
+
+-- ==========================================
+-- 5. AUTOMÁTICO
+-- ==========================================
+AutoTab:Section({ Title = "Disparo y Farmeo" })
+
+AutoTab:Toggle({
+	Title = "Auto Shoot (Raycast + Silent Aim)",
+	Desc = "Raycast detecta al Murder, dispara automático y aplica Silent Aim",
+	Value = State.AutoShotMurder,
+	Callback = function(v)
+		State.AutoShotMurder = v
+		if not v then activeSilentAimPos = nil end
+	end
+})
+
+AutoTab:Toggle({
+	Title = "Farmear Coins (TP Bolsa)",
+	Desc = "TP entre monedas hasta llenar la bolsa",
+	Value = State.FarmCoins,
+	Callback = function(v) State.FarmCoins = v end
+})
+
+AutoTab:Slider({
+	Title = "Capacidad de Bolsa (Coins)",
+	Step = 1,
+	Value = { Min = 10, Max = 100, Default = State.CoinBagLimit },
+	Callback = function(val) State.CoinBagLimit = tonumber(val) or 40 end
+})
+
+AutoTab:Toggle({
+	Title = "Auto Coger Pistola",
+	Desc = "Recoge GunDrop al caer",
+	Value = State.AutoGrabGun,
+	Callback = function(v) State.AutoGrabGun = v end
+})
+
+AutoTab:Section({ Title = "Optimización y Sesión" })
+
+AutoTab:Toggle({
+	Title = "FPS Boost",
+	Desc = "Reduce sombras y reflejos pesados",
+	Value = State.FPSBoost,
+	Callback = function(v) applyFPSBoost(v) end
+})
+
+AutoTab:Toggle({
+	Title = "Anti AFK",
+	Desc = "Evita desconexiones por inactividad",
+	Value = State.AntiAFK,
+	Callback = function(v) State.AntiAFK = v end
+})
+
+LocalPlayer.Idled:Connect(function()
+	if State.AntiAFK then
+		pcall(function()
+			VirtualUser:CaptureController()
+			VirtualUser:ClickButton2(Vector2.new())
+		end)
+	end
+end)
+
+-- ==========================================
+-- 6. HITBOX
+-- ==========================================
+HitboxTab:Section({ Title = "Hitbox Expander" })
+
+HitboxTab:Toggle({
+	Title = "Activar Hitbox Expander",
+	Desc = "Expande HumanoidRootPart sin colisión",
+	Value = State.HitboxExpander,
+	Callback = function(v)
+		State.HitboxExpander = v
+		hitboxDirty = true
+		if not v then resetHitboxes() else updateHitboxes() end
+	end
+})
+
+HitboxTab:Slider({
+	Title = "Tamaño de Hitbox",
+	Step = 1,
+	Value = { Min = 2, Max = 30, Default = State.HitboxSize },
+	Callback = function(val)
+		State.HitboxSize = tonumber(val) or 12
+		hitboxDirty = true
+		if State.HitboxExpander then updateHitboxes() end
+	end
+})
+
+HitboxTab:Slider({
+	Title = "Transparencia de Hitbox",
+	Step = 0.05,
+	Value = { Min = 0, Max = 1, Default = State.HitboxTransparency },
+	Callback = function(val)
+		State.HitboxTransparency = tonumber(val) or 0.65
+		hitboxDirty = true
+		if State.HitboxExpander then updateHitboxes() end
+	end
+})
+
+-- ==========================================
+-- 7. VOTAR MAPA
+-- ==========================================
+VoteTab:Section({ Title = "Votación Automática" })
+
+VoteTab:Dropdown({
+	Title = "Seleccionar Mapa",
+	Values = MapsList,
+	Value = State.SelectedMap,
+	Callback = function(selected) State.SelectedMap = tostring(selected) end
+})
+
+VoteTab:Toggle({
+	Title = "Auto Votar Mapa",
+	Desc = "Te mueve a la zona del mapa elegido",
+	Value = State.AutoVoteMap,
+	Callback = function(v) State.AutoVoteMap = v end
+})
+
+-- ==========================================
+-- 8. CONFI
+-- ==========================================
+ConfiTab:Section({ Title = "Entorno y Servidor" })
+
+ConfiTab:Dropdown({
+	Title = "Skybox",
+	Values = SkyboxNames,
+	Value = State.SkyboxName,
+	Callback = function(skyName) applySkyboxByName(tostring(skyName)) end
+})
+
+ConfiTab:Button({
+	Title = "Server Hop (Cambiar Servidor)",
+	Desc = "Conecta a otro servidor público",
+	Callback = function()
+		local placeId = game.PlaceId
+		local currentJobId = game.JobId
+		local targetServerId = nil
+		pcall(function()
+			local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100", placeId)
+			local decoded = HttpService:JSONDecode(game:HttpGet(url))
+			if decoded and type(decoded.data) == "table" then
+				local candidates = {}
+				for _, srv in ipairs(decoded.data) do
+					if type(srv) == "table" and srv.id and tostring(srv.id) ~= tostring(currentJobId) then
+						if (tonumber(srv.maxPlayers) or 0) > (tonumber(srv.playing) or 0) then
+							table.insert(candidates, tostring(srv.id))
+						end
+					end
+				end
+				if #candidates > 0 then targetServerId = candidates[math.random(1, #candidates)] end
+			end
+		end)
+		pcall(function()
+			if targetServerId then
+				TeleportService:TeleportToPlaceInstance(placeId, targetServerId, LocalPlayer)
+			else
+				TeleportService:Teleport(placeId, LocalPlayer)
+			end
+		end)
+	end
+})
+
+ConfiTab:Section({ Title = "Configuración y Limpieza" })
+
+local function serializeState()
+	return {
+		SkyboxName = State.SkyboxName, SpeedEnabled = State.SpeedEnabled, CustomSpeed = State.CustomSpeed,
+		InfinityJump = State.InfinityJump, Noclip = State.Noclip, ESPRoles = State.ESPRoles,
+		CamLockEnabled = State.CamLockEnabled, AutoKillEnabled = State.AutoKillEnabled,
+		AutoShotMurder = State.AutoShotMurder, AutoGrabGun = State.AutoGrabGun, FarmCoins = State.FarmCoins,
+		CoinBagLimit = State.CoinBagLimit, FPSBoost = State.FPSBoost, FlyEnabled = State.FlyEnabled,
+		FlySpeed = State.FlySpeed, AntiAFK = State.AntiAFK, HitboxExpander = State.HitboxExpander,
+		HitboxSize = State.HitboxSize, HitboxTransparency = State.HitboxTransparency,
+		SelectedMap = State.SelectedMap, AutoVoteMap = State.AutoVoteMap
+	}
+end
+
+local function applyLoadedConfig(data)
+	if type(data) ~= "table" then return false end
+	for k, v in pairs(data) do
+		if State[k] ~= nil then State[k] = v end
+	end
+	applySkyboxByName(State.SkyboxName)
+	applyFPSBoost(State.FPSBoost)
+	setFlyState(State.FlyEnabled)
+	setNoclipState(State.Noclip)
+	hitboxDirty = true
+	if not State.ESPRoles then clearESP() else updateESPRoles() end
+	if not State.HitboxExpander then resetHitboxes() else updateHitboxes() end
+	return true
+end
+
+ConfiTab:Button({
+	Title = "Guardar Configuración",
+	Callback = function()
+		local snapshot = serializeState()
+		MemoryConfigBackup = snapshot
+		if typeof(writefile) == "function" then
+			pcall(function() writefile(ConfigFileName, HttpService:JSONEncode(snapshot)) end)
+		end
+		WindUI:Notify({ Title = "Family Hud", Content = "Configuración guardada.", Duration = 2 })
+	end
+})
+
+ConfiTab:Button({
+	Title = "Cargar Configuración",
+	Callback = function()
+		if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(ConfigFileName) then
+			local ok, decoded = pcall(function() return HttpService:JSONDecode(readfile(ConfigFileName)) end)
+			if ok and applyLoadedConfig(decoded) then
+				WindUI:Notify({ Title = "Family Hud", Content = "Configuración cargada.", Duration = 2 })
+				return
+			end
+		end
+		if MemoryConfigBackup and applyLoadedConfig(MemoryConfigBackup) then
+			WindUI:Notify({ Title = "Family Hud", Content = "Configuración cargada desde sesión.", Duration = 2 })
+		end
+	end
+})
+
+ConfiTab:Button({
+	Title = "Desactivar Todo y Restaurar",
+	Callback = function()
+		State.SpeedEnabled = false; State.InfinityJump = false; State.Noclip = false; State.ESPRoles = false
+		State.CamLockEnabled = false; State.AutoKillEnabled = false; State.AutoShotMurder = false
+		activeSilentAimPos = nil; State.FPSBoost = false; State.AutoGrabGun = false; State.FarmCoins = false
+		State.FlyEnabled = false; State.AntiAFK = false; State.HitboxExpander = false; State.AutoVoteMap = false
+		State.SkyboxName = "Default Sky"
+		setFlyState(false); setNoclipState(false); applySkyboxByName("Default Sky"); applyFPSBoost(false)
+		clearESP(); resetHitboxes()
+		local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if hum then hum.WalkSpeed = State.DefaultSpeed end
+		WindUI:Notify({ Title = "Family Hud", Content = "Funciones desactivadas.", Duration = 2 })
+	end
+})
+
+-- ==========================================
+-- 9. CREDITS
+-- ==========================================
+CreditsTab:Section({ Title = "Creadores y Equipo" })
+
+CreditsTab:Paragraph({
+	Title = "By Heaven (Owner)",
+	Desc = "Fundador, diseño y desarrollo de Family Hud."
+})
+
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+	clearFlyPhysics()
+	hitboxDirty = true
+	if State.FlyEnabled then task.defer(function() setFlyState(true) end) end
+	if State.Noclip then task.defer(function() applyNoclipStep(newChar) end) end
+end)
+
+-- ==========================================
+-- HILOS LIGEROS Y LOOP PRINCIPAL
+-- ==========================================
+local cachedCoins = {}
+local coinCursor = 1
+local cachedVotePart = nil
+local lastVoteMapName = ""
+
+task.spawn(function()
+	while Window do
+		if State.FarmCoins then
+			local list = {}
+			for _, obj in ipairs(Workspace:GetDescendants()) do
+				if obj:IsA("BasePart") and obj.Parent then
+					local lower = string.lower(obj.Name)
+					if lower == "coin_server" or lower == "coin" or string.find(lower, "coin") then
+						table.insert(list, obj)
+					end
+				end
+			end
+			cachedCoins = list
+		end
+
+		if State.AutoVoteMap then
+			local chosen = string.lower(State.SelectedMap or "")
+			if chosen ~= lastVoteMapName or not cachedVotePart or not cachedVotePart.Parent then
+				lastVoteMapName = chosen
+				cachedVotePart = nil
+				for _, obj in ipairs(Workspace:GetDescendants()) do
+					if obj:IsA("BasePart") and string.find(string.lower(obj.Name), chosen) then
+						cachedVotePart = obj
+						break
+					end
+				end
+			end
+		end
+
+		task.wait(1.5)
+	end
+end)
+
+local frameCounter = 0
+local elapsedStats = 0
+local currentFPS = 60
+local lastCoinTp = 0
+local lastEspUpdate = 0
+
+RunService.RenderStepped:Connect(function(dt)
+	frameCounter += 1
+	elapsedStats += dt
+	if elapsedStats >= 0.45 then
+		currentFPS = math.floor((frameCounter / elapsedStats) + 0.5)
+		local pingMs = getCurrentPingMs()
+		frameCounter = 0
+		elapsedStats = 0
+		pcall(function()
+			PerfParagraph:SetDesc("FPS: " .. tostring(currentFPS) .. "  |  MS: " .. tostring(pingMs) .. " ms")
+		end)
+	end
+
+	local now = os.clock()
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+
+	if hum and State.SpeedEnabled and hum.WalkSpeed ~= State.CustomSpeed then
+		hum.WalkSpeed = State.CustomSpeed
+	end
+
+	if root and hum and State.FlyEnabled then
+		local lv = ensureFlyPhysics(root, hum)
+		if lv then
+			local moveDir = hum.MoveDirection or Vector3.zero
+			local vertical = 0
+			if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vertical += 1 end
+			if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then vertical -= 1 end
+			lv.VectorVelocity = Vector3.new(moveDir.X * State.FlySpeed, vertical * State.FlySpeed, moveDir.Z * State.FlySpeed)
+		end
+	elseif flyLinearVel then
+		clearFlyPhysics()
+	end
+
+	if State.AutoGrabGun and root then
+		local gunDrop = Workspace:FindFirstChild("GunDrop", true)
+		if gunDrop and gunDrop:IsA("BasePart") then safeTouch(gunDrop, root) end
+	end
+
+	if State.FarmCoins and root then
+		if isCoinBagFull() then
+			State.FarmCoins = false
+		elseif (now - lastCoinTp) >= 0.16 and #cachedCoins > 0 then
+			if coinCursor > #cachedCoins then coinCursor = 1 end
+			local coin = cachedCoins[coinCursor]
+			coinCursor += 1
+			if coin and coin.Parent then
+				lastCoinTp = now
+				pcall(function() root.CFrame = coin.CFrame * CFrame.new(0, 1.5, 0) end)
+				safeTouch(coin, root)
+			end
+		end
+	end
+
+	if State.AutoShotMurder then
+		runRaycastSilentAutoShoot()
+	else
+		activeSilentAimPos = nil
+	end
+
+	if State.AutoKillEnabled and char and hum and root then
+		runAutoKillStep(char, hum, root)
+	end
+
+	if State.CamLockEnabled and Camera and root and hasGunEquippedOrOwned() then
+		local torsoPart, _, murderChar = getMurderTargetInfo()
+		if torsoPart and detectMurderByRaycast(torsoPart, murderChar) then
+			pcall(function() Camera.CFrame = CFrame.lookAt(Camera.CFrame.Position, torsoPart.Position) end)
+		end
+	end
+
+	if State.AutoVoteMap and root and cachedVotePart and cachedVotePart.Parent then
+		pcall(function() root.CFrame = cachedVotePart.CFrame + Vector3.new(0, 3, 0) end)
+	end
+
+	if State.ESPRoles and (now - lastEspUpdate) >= 0.35 then
+		lastEspUpdate = now
+		pcall(updateESPRoles)
+	end
+
+	if State.HitboxExpander and hitboxDirty then
+		pcall(updateHitboxes)
+	end
+end)
